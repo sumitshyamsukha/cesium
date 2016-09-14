@@ -294,7 +294,7 @@ define([
             set : function(value) {
                 this._meta = value;
             }
-        },
+        }
 
     });
 

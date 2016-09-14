@@ -629,7 +629,7 @@ define([
 
     Node.prototype._evaluateArray = function(feature, result) {
         var array = [];
-        for (var i = 0; i<this._value.length; i++) {
+        for (var i = 0; i < this._value.length; i++) {
             array[i] = this._value[i].evaluate(feature, result);
         }
         return array;

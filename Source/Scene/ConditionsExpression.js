@@ -134,7 +134,7 @@ define([
             var length = conditions.length;
             for (var i = 0; i < length; ++i) {
                 var statement = conditions[i];
-                if (statement.condition.evaluate(feature, result)) {
+                if (statement.condition.evaluate(feature)) {
                     return statement.expression.evaluateColor(feature, result);
                 }
             }
