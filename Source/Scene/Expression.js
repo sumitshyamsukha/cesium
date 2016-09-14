@@ -4,6 +4,7 @@ define([
        '../Core/defined',
        '../Core/defineProperties',
        '../Core/DeveloperError',
+       '../Core/isArray',
        '../ThirdParty/jsep',
        './ExpressionNodeType'
     ], function(
@@ -11,6 +12,7 @@ define([
         defined,
         defineProperties,
         DeveloperError,
+        isArray,
         jsep,
         ExpressionNodeType) {
     "use strict";
@@ -115,6 +117,15 @@ define([
      */
     Expression.prototype.evaluateColor = function(feature, result) {
         return this._runtimeAst.evaluate(feature, result);
+    };
+
+    /**
+     * Build a GLSL code snippet from an expression.
+     *
+     * @private
+     */
+    Expression.prototype.buildShader = function() {
+        return this._runtimeAst.buildShader();
     };
 
     function Node(type, value, left, right, test) {
@@ -542,7 +553,7 @@ define([
                 Color.fromCssColorString(args[0].evaluate(feature, result), result);
                 result.alpha = args[1].evaluate(feature, result);
             } else {
-                Color.fromCssColorString(this._left[0].evaluate(feature, result), result);
+                Color.fromCssColorString(args[0].evaluate(feature, result), result);
             }
         } else if (this._value === 'rgb') {
             Color.fromBytes(
@@ -879,6 +890,171 @@ define([
             throw new DeveloperError('Error: Unexpected function call "' + this._value + '".');
         }
         //>>includeEnd('debug');
+    };
+
+    function convertHslToRgb(ast) {
+        // Check if the color contains any nested expressions to see if the color can be converted here.
+        // E.g. "hsl(0.9, 0.6, 0.7)" is able to convert directly to rgb, "hsl(0.9, 0.6, ${Height})" is not.
+        var channels = ast._left;
+        var length = channels.length;
+        for (var i = 0; i < length; ++i) {
+            if (channels[i]._type !== ExpressionNodeType.LITERAL_NUMBER) {
+                return undefined;
+            }
+        }
+        var h = channels[0]._value;
+        var s = channels[1]._value;
+        var l = channels[2]._value;
+        var a = (length === 4) ? channels[3]._value : 1.0;
+
+        return Color.fromHsl(h, s, l, a, scratchColor);
+    }
+
+    Node.prototype.buildShader = function() {
+        // Don't support boolean values, because properties can't be boolean
+        // Need to make sure the variable is actually correct and actually a binary property
+        // How to handle operators that are not acting on the right types?
+        // Like + and - don't make sense for bools, and || and && don't make sense for numbers
+        // TODO : only support scalars currently
+        // TODO : this is very specific to points, should I pass in the prefix?
+        // Convert any show stuff to discard.
+        // Check equality statements for equal types. Cast to int/float if needed?
+
+        var color;
+
+        var type = this._type;
+        var value = this._value;
+
+        var left;
+        var right;
+        var test;
+
+        if (defined(this._left)) {
+            if (isArray(this._left)) {
+                // Left can be an array if the type is LITERAL_COLOR
+                var length = this._left.length;
+                left = new Array(length);
+                for (var i = 0; i < length; ++i) {
+                    var shader = this._left[i].buildShader();
+                    if (!defined(shader)) {
+                        // If the left side is not valid GLSL, then the expression is not valid GLSL.
+                        return undefined;
+                    }
+                    left[i] = shader;
+                }
+            } else {
+                left = this._left.buildShader();
+                if (!defined(left)) {
+                    // If the left side is not valid GLSL, then the expression is not valid GLSL.
+                    return undefined;
+                }
+            }
+        }
+
+        if (defined(this._right)) {
+            right = this._right.buildShader();
+            if (!defined(right)) {
+                // If the right side is not valid GLSL, then the expression is not valid GLSL.
+                return undefined;
+            }
+        }
+
+        if (defined(this._test)) {
+            test = this._test.buildShader();
+            if (!defined(test)) {
+                // If the test is not valid GLSL, then the expression is not valid GLSL.
+                return undefined;
+            }
+        }
+
+        switch (type) {
+            case ExpressionNodeType.VARIABLE:
+                // Get variable from its vertex attribute name.
+                // TODO : return undefined if the name doesn't exist and its not a binary property?
+                // TODO : Does this check happen elsewhere?
+                return 'czm_points_' + value;
+            case ExpressionNodeType.UNARY:
+                // Supported types: +, -, !, Boolean, Number
+                if ((value === 'isNan') || (value === 'isFinite') || (value === 'String')) {
+                    return undefined;
+                } else if (value === 'Boolean') {
+                    return 'bool(' + left + ')';
+                } else if (value === 'Number') {
+                    return 'float(' + left + ')';
+                } else {
+                    return value + left;
+                }
+                break;
+            case ExpressionNodeType.BINARY:
+                // TODO : a lot of these will not work with vec or mat types
+                // Supported types: ||, &&, ===, !==, <, >, <=, >=, +, -, *, /, %
+                if (value === '%') {
+                    return 'mod(' + left + ', ' + right + ')';
+                } else if (value === '===') {
+                    return '(' + left + ' == ' + right + ')';
+                } else if (value === ' !==') {
+                    return '(' + left + ' != ' + right + ')';
+                } else {
+                    return '(' + left + ' ' + value + ' ' + right + ')';
+                }
+                break;
+            case ExpressionNodeType.CONDITIONAL:
+                return '(' + test + ' ? ' + left + ' : ' + right + ')';
+            case ExpressionNodeType.LITERAL_BOOLEAN:
+                // TODO : need to watch out, this might be checking a boolean against the property, which can only be scalar, vec, or mat
+                return value ? 'true' : 'false';
+            case ExpressionNodeType.LITERAL_NUMBER:
+                if (value % 1 !== 0) {
+                    // Convert int to float
+                    return value.toFixed(1);
+                } else {
+                    return value.toString();
+                }
+                break;
+            case ExpressionNodeType.LITERAL_STRING:
+                // The only supported strings are css color strings
+                color = Color.fromCssColorString(value, scratchColor);
+                if (defined(color)) {
+                    return 'vec3(' + color.red + ', ' + color.green + ', ' + color.blue + ')';
+                }
+                return undefined;
+            case ExpressionNodeType.LITERAL_COLOR:
+                var args = left;
+                if (value === 'color') {
+                    if (!defined(args)) {
+                        return 'vec4(1.0)';
+                    } else if (args.length > 1) {
+                        var rgb = args[0];
+                        var alpha = args[1];
+                        return 'vec4(' + rgb + ', ' + alpha + ')';
+                    } else {
+                        return 'vec4(' + args[0] + ', 1.0)';
+                    }
+                } else if (value === 'rgb') {
+                    return 'vec4(' + args[0] + ' / 255.0, ' + args[1] + ' / 255.0, ' + args[2] + ' / 255.0, 1.0)';
+                } else if (value === 'rgba') {
+                    return 'vec4(' + args[0] + ' / 255.0, ' + args[1] + ' / 255.0, ' + args[2] + ' / 255.0, ' + args[3] + ')';
+                } else if (value === 'hsl') {
+                    color = convertHslToRgb(this);
+                    if (defined(color)) {
+                        return 'vec4(' + color.red + ', ' + color.green + ', ' + color.blue + ', ' + color.alpha + ')';
+                    } else {
+                        return 'czm_hsl2rgb(vec4(' + args[0] + ', ' + args[1] + ', ' + args[2] + ', 1.0))';
+                    }
+                } else if (value === 'hsla') {
+                    color = convertHslToRgb(this);
+                    if (defined(color)) {
+                        return 'vec4(' + color.red + ', ' + color.green + ', ' + color.blue + ', ' + color.alpha + ')';
+                    } else {
+                        return 'czm_hsl2rgb(vec4(' + args[0] + ', ' + args[1] + ', ' + args[2] + ', ' + args[3] + '))';
+                    }
+                }
+                break;
+            default:
+                // TODO : ARRAY could become a vector type
+                // Not supported: MEMBER, FUNCTION_CALL, ARRAY, REGEX, VARIABLE_IN_STRING, LITERAL_NULL, LITERAL_REGEX, LITERAL_UNDEFINED
+                return undefined;
+        }
     };
 
     return Expression;
