@@ -1,4 +1,4 @@
-﻿See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to Cesium.  The following people have contributed to Cesium, under the following agreements:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to Cesium.  The following people have contributed to Cesium, under the following agreements:
 
 ## [Corporate CLA](http://www.agi.com/licenses/corporate-cla-agi-v1.0.txt)
 
@@ -105,3 +105,4 @@
 * [Andy Fry](https://github.com/andyfry01)
 * [Jorge Piera Llodra](https://github.com/jorpiell)
 * [Tom Payne](https://github.com/twpayne)
+* [Sumit Shyamsukha] (https://github.com/sumitshyamsukha)
